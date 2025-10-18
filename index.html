@@ -1,0 +1,1139 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>باشگاه نخلاب - پنل مدیریت</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Jalaali Date Library (REMOVED as per user request to use Gregorian) -->
+    <!-- Font: Vazirmatn for Persian text -->
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;700;900&display=swap');
+        :root {
+            font-family: 'Vazirmatn', 'Inter', sans-serif;
+        }
+        .tab-btn.active {
+            background-color: #10b981; /* Emerald 500 */
+            color: white;
+            box-shadow: 0 4px 6px -1px rgba(16, 185, 129, 0.5), 0 2px 4px -2px rgba(16, 185, 129, 0.5);
+        }
+    </style>
+</head>
+<body class="bg-gray-50 min-h-screen flex flex-col">
+
+    <!-- Main Application Container -->
+    <div id="app" class="flex flex-col flex-grow items-center p-4 sm:p-8">
+        <h1 class="text-4xl font-extrabold text-emerald-600 mb-6 border-b-4 border-emerald-400 pb-2">
+            باشگاه نخلاب - پنل مدیریت
+        </h1>
+
+        <!-- Loading & Auth State -->
+        <div id="loading-indicator" class="text-gray-500 my-10">در حال بارگذاری...</div>
+        <div id="auth-warning" class="hidden text-red-500 font-bold p-4 bg-red-100 rounded-lg shadow-md">
+            خطا در احراز هویت. لطفاً مطمئن شوید که به اینترنت متصل هستید یا دوباره تلاش کنید.
+        </div>
+
+        <!-- Main Content (Hidden until authenticated) -->
+        <div id="main-content" class="hidden w-full max-w-6xl bg-white rounded-xl shadow-2xl p-4 sm:p-8">
+
+            <!-- Tabs Navigation -->
+            <div class="flex flex-wrap justify-center gap-2 mb-6 border-b pb-4">
+                <button class="tab-btn active p-3 rounded-xl transition duration-200 text-gray-700 hover:bg-emerald-100" data-tab="resources">
+                    ۱. مدیریت کالا و منابع
+                </button>
+                <button class="tab-btn p-3 rounded-xl transition duration-200 text-gray-700 hover:bg-emerald-100" data-tab="sales-reg">
+                    ۲. ثبت فروش روزانه
+                </button>
+                <button class="tab-btn p-3 rounded-xl transition duration-200 text-gray-700 hover:bg-emerald-100" data-tab="sales-report">
+                    ۳. گزارش مالی فروش
+                </button>
+                <button class="tab-btn p-3 rounded-xl transition duration-200 text-gray-700 hover:bg-emerald-100" data-tab="gym-men">
+                    ۴. باشگاه آقایان (پرداختی‌ها)
+                </button>
+                <button class="tab-btn p-3 rounded-xl transition duration-200 text-gray-700 hover:bg-emerald-100" data-tab="gym-women">
+                    ۵. باشگاه بانوان (پرداختی‌ها)
+                </button>
+            </div>
+
+            <!-- Tab Content -->
+            <div id="tab-content">
+                <!-- Content will be injected here -->
+            </div>
+
+            <!-- Global Message/Error Box -->
+            <div id="message-box" class="mt-6 p-3 rounded-lg text-center font-bold transition-opacity duration-300 opacity-0 hidden"></div>
+        </div>
+        
+        <!-- User ID for Debugging/Reference (MANDATORY) -->
+        <p class="text-xs text-gray-400 mt-4">
+            شناسه کاربری: <span id="user-id">...</span>
+        </p>
+
+    </div>
+
+    <!-- Firebase Imports and Main Application Logic -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, onSnapshot, collection, query, addDoc, updateDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        
+        // --- Date Helper (Gregorian/Miladi) ---
+
+        // Helper to get current date in Gregorian ISO format (YYYY-MM-DD)
+        function getCurrentGregorianDate() {
+            return new Date().toISOString().substring(0, 10);
+        }
+        
+        // Helper to get Gregorian date 30 days ago (for report defaults)
+        function getDate30DaysAgo() {
+            const date = new Date();
+            date.setDate(date.getDate() - 30);
+            return date.toISOString().substring(0, 10);
+        }
+        
+        // setLogLevel('Debug'); // Uncomment for debugging Firebase
+
+        // Global variables provided by the environment
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+        let db, auth, userId;
+        const LOADING_INDICATOR = document.getElementById('loading-indicator');
+        const MAIN_CONTENT = document.getElementById('main-content');
+        const AUTH_WARNING = document.getElementById('auth-warning');
+        const USER_ID_SPAN = document.getElementById('user-id');
+        const TAB_CONTENT = document.getElementById('tab-content');
+        const MESSAGE_BOX = document.getElementById('message-box');
+
+        // Helper: Display floating message
+        function displayMessage(message, isError = false) {
+            MESSAGE_BOX.textContent = message;
+            MESSAGE_BOX.className = isError 
+                ? 'mt-6 p-3 rounded-lg text-center font-bold opacity-100 block bg-red-100 text-red-700 shadow-md'
+                : 'mt-6 p-3 rounded-lg text-center font-bold opacity-100 block bg-green-100 text-green-700 shadow-md';
+            
+            MESSAGE_BOX.style.opacity = '1';
+            MESSAGE_BOX.style.display = 'block';
+
+            setTimeout(() => {
+                MESSAGE_BOX.style.opacity = '0';
+                MESSAGE_BOX.ontransitionend = () => {
+                    MESSAGE_BOX.style.display = 'none';
+                };
+            }, 3000);
+        }
+
+        // Helper: Format number to currency (Toman)
+        function formatCurrency(number) {
+            if (number === undefined || number === null) return "۰ تومان";
+            // Use 'fa-IR' locale for Persian number formatting
+            return new Intl.NumberFormat('fa-IR').format(Math.round(number)) + " تومان";
+        }
+        
+        // Helper: Get Firestore path for a collection (private user data)
+        function getCollectionPath(collectionName) {
+            return `artifacts/${appId}/users/${userId}/${collectionName}`;
+        }
+
+        // --- Firebase Initialization and Authentication ---
+
+        async function initFirebase() {
+            try {
+                const app = initializeApp(firebaseConfig);
+                auth = getAuth(app);
+                db = getFirestore(app);
+
+                // Wait for auth state to be ready
+                await new Promise((resolve) => {
+                    onAuthStateChanged(auth, async (user) => {
+                        if (user) {
+                            userId = user.uid;
+                            USER_ID_SPAN.textContent = userId;
+                            resolve();
+                        } else {
+                            // Try to sign in with custom token or anonymously
+                            if (initialAuthToken) {
+                                await signInWithCustomToken(auth, initialAuthToken);
+                            } else {
+                                await signInAnonymously(auth);
+                            }
+                        }
+                    });
+                });
+
+                LOADING_INDICATOR.classList.add('hidden');
+                MAIN_CONTENT.classList.remove('hidden');
+                
+                // Start listeners for all data
+                setupListeners();
+                
+                // Show default tab
+                switchTab('resources');
+
+            } catch (error) {
+                console.error("Firebase Initialization Error:", error);
+                LOADING_INDICATOR.classList.add('hidden');
+                AUTH_WARNING.classList.remove('hidden');
+            }
+        }
+
+        // --- Data Listeners & State Management ---
+
+        let products = [];
+        let sales = [];
+        let trainers = [];
+        let paymentsMen = [];
+        let paymentsWomen = [];
+
+        function setupListeners() {
+            if (!userId || !db) return;
+
+            // 1. Products Listener
+            onSnapshot(collection(db, getCollectionPath('products')), (snapshot) => {
+                // Attach selling price and cost to each product for easy access during sales calculation
+                products = snapshot.docs.map(doc => {
+                    const data = doc.data();
+                    const sellingPrice = data.costPrice * (1 + data.profitMarginPercent / 100);
+                    return { id: doc.id, ...data, sellingPrice: sellingPrice, costPrice: data.costPrice };
+                }).filter(p => !p.deleted);
+                renderResourceTab(); // Re-render if current tab
+                renderSalesRegTab(); // Re-render to update product options if applicable
+            });
+
+            // 2. Sales Listener
+            onSnapshot(collection(db, getCollectionPath('sales')), (snapshot) => {
+                sales = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                renderSalesList(); // Update the list view (if tab is active)
+            });
+
+            // 3. Trainers Listener
+            onSnapshot(collection(db, getCollectionPath('trainers')), (snapshot) => {
+                trainers = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })).filter(t => !t.deleted);
+                // Re-render relevant tabs
+                renderGymTab('men');
+                renderGymTab('women');
+            });
+
+            // 4. Payments Men Listener
+            onSnapshot(collection(db, getCollectionPath('payments_men')), (snapshot) => {
+                paymentsMen = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                renderGymPaymentsList('payments_men');
+            });
+
+            // 5. Payments Women Listener
+            onSnapshot(collection(db, getCollectionPath('payments_women')), (snapshot) => {
+                paymentsWomen = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                renderGymPaymentsList('payments_women');
+            });
+        }
+
+        // --- UI & Rendering Functions ---
+        
+        function switchTab(tabId) {
+            // Hide all tab content
+            TAB_CONTENT.innerHTML = '';
+            
+            // Deactivate all buttons and activate the current one
+            document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+            document.querySelector(`.tab-btn[data-tab="${tabId}"]`)?.classList.add('active');
+
+            if (tabId === 'resources') renderResourceTab();
+            else if (tabId === 'sales-reg') renderSalesRegTab();
+            else if (tabId === 'sales-report') renderSalesReportTab();
+            else if (tabId === 'gym-men') renderGymTab('men');
+            else if (tabId === 'gym-women') renderGymTab('women');
+        }
+
+        // --- Tab Content Renderers ---
+
+        function renderResourceTab() {
+            const isCurrent = document.querySelector('.tab-btn.active')?.dataset.tab === 'resources';
+            if (!isCurrent) return; 
+
+            // 1. Product List Display (Showing all products)
+            const productListHTML = `
+                <div class="space-y-6">
+                    <h2 class="text-2xl font-bold text-gray-800 border-b pb-2">لیست کامل کالاها</h2>
+                    ${products.length === 0 
+                        ? '<p class="text-gray-500">هیچ کالایی ثبت نشده است.</p>' 
+                        : `<div class="overflow-x-auto">
+                            <table class="min-w-full bg-white rounded-lg shadow-md">
+                                <thead class="bg-emerald-500 text-white">
+                                    <tr>
+                                        <th class="py-3 px-4 text-right">نام کالا</th>
+                                        <th class="py-3 px-4 text-right">قیمت خرید (تومان)</th>
+                                        <th class="py-3 px-4 text-right">سود (%)</th>
+                                        <th class="py-3 px-4 text-right">قیمت فروش</th>
+                                        <th class="py-3 px-4 text-center">عملیات</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    ${products.map(p => {
+                                        // sellingPrice is already attached to product object in listener
+                                        return `
+                                            <tr class="border-b hover:bg-gray-50">
+                                                <td class="py-3 px-4">${p.name}</td>
+                                                <td class="py-3 px-4">${formatCurrency(p.costPrice)}</td>
+                                                <td class="py-3 px-4">${p.profitMarginPercent}%</td>
+                                                <td class="py-3 px-4 font-bold text-emerald-600">${formatCurrency(p.sellingPrice)}</td>
+                                                <td class="py-3 px-4 text-center">
+                                                    <button onclick="window.deleteProduct('${p.id}', '${p.name}')" class="text-red-500 hover:text-red-700 text-sm">حذف</button>
+                                                </td>
+                                            </tr>
+                                        `;
+                                    }).join('')}
+                                </tbody>
+                            </table>
+                        </div>`
+                    }
+                    
+                    <h2 class="text-2xl font-bold text-gray-800 border-b pb-2 pt-4">افزودن کالای جدید</h2>
+                    <form id="add-product-form" class="bg-gray-100 p-6 rounded-xl shadow-inner space-y-4">
+                        <input type="text" id="product-name" placeholder="نام کالا" class="w-full p-3 border rounded-lg focus:ring-emerald-500 focus:border-emerald-500" required>
+                        <input type="number" id="cost-price" placeholder="قیمت خرید (تومان)" class="w-full p-3 border rounded-lg focus:ring-emerald-500 focus:border-emerald-500" required min="0">
+                        <input type="number" id="profit-margin" placeholder="درصد سود مورد نظر (مثلاً: 20)" class="w-full p-3 border rounded-lg focus:ring-emerald-500 focus:border-emerald-500" required min="0">
+                        <button type="submit" class="w-full bg-emerald-600 text-white p-3 rounded-xl font-semibold hover:bg-emerald-700 transition duration-200 shadow-lg">
+                            ثبت کالا
+                        </button>
+                    </form>
+                </div>
+            `;
+            TAB_CONTENT.innerHTML = productListHTML;
+
+            document.getElementById('add-product-form')?.addEventListener('submit', handleAddProduct);
+        }
+        
+        window.deleteProduct = async function(productId, productName) {
+            if (confirm(`آیا مطمئن هستید که می‌خواهید کالای "${productName}" را حذف کنید؟`)) {
+                 try {
+                    // Soft delete by setting a flag
+                    await setDoc(doc(db, getCollectionPath('products'), productId), {deleted: true}, { merge: true });
+                    displayMessage(`کالای "${productName}" حذف شد.`);
+                 } catch (e) {
+                    console.error("Error deleting document: ", e);
+                    displayMessage("خطا در حذف کالا.", true);
+                 }
+            }
+        }
+
+        async function handleAddProduct(event) {
+            event.preventDefault();
+            const name = document.getElementById('product-name').value.trim();
+            const costPrice = parseFloat(document.getElementById('cost-price').value);
+            const profitMarginPercent = parseFloat(document.getElementById('profit-margin').value);
+
+            if (!name || isNaN(costPrice) || isNaN(profitMarginPercent) || costPrice < 0 || profitMarginPercent < 0) {
+                return displayMessage("لطفا تمام فیلدها را به درستی پر کنید.", true);
+            }
+
+            const newProduct = {
+                name: name,
+                costPrice: costPrice,
+                profitMarginPercent: profitMarginPercent,
+                createdAt: new Date().toISOString()
+            };
+
+            try {
+                await addDoc(collection(db, getCollectionPath('products')), newProduct);
+                document.getElementById('add-product-form').reset();
+                displayMessage(`کالای "${name}" با موفقیت ثبت شد.`);
+            } catch (e) {
+                console.error("Error adding document: ", e);
+                displayMessage("خطا در ثبت کالا.", true);
+            }
+        }
+        
+
+        function renderSalesRegTab() {
+            const isCurrent = document.querySelector('.tab-btn.active')?.dataset.tab === 'sales-reg';
+            if (!isCurrent) return;
+
+            // Prepare product options for the sales form
+            const productOptions = products
+                .filter(p => p.sellingPrice > 0) 
+                .map(p => {
+                    // Selling price is pre-calculated in the listener
+                    return `<option value="${p.id}" data-price="${p.sellingPrice}" data-cost="${p.costPrice}">${p.name} (${formatCurrency(p.sellingPrice)})</option>`;
+                }).join('');
+
+            const salesRegHTML = `
+                <div class="space-y-6">
+                    <h2 class="text-2xl font-bold text-gray-800 border-b pb-2">ثبت فروش روزانه</h2>
+                    <form id="sales-reg-form" class="bg-gray-100 p-6 rounded-xl shadow-inner space-y-4">
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <!-- Date Input is now type="date" (Gregorian YYYY-MM-DD) -->
+                            <input type="date" id="sale-date" placeholder="تاریخ فروش (YYYY-MM-DD)" class="w-full p-3 border rounded-lg focus:ring-emerald-500 focus:border-emerald-500" required value="${getCurrentGregorianDate()}">
+                            <input type="number" id="commission-percent" placeholder="پورسانت فروشنده از سود (%) (مثلاً: 5)" value="5" class="w-full p-3 border rounded-lg focus:ring-emerald-500 focus:border-emerald-500" required min="0">
+                            <select id="payment-method" class="w-full p-3 border rounded-lg focus:ring-emerald-500 focus:border-emerald-500">
+                                <option value="نقدی">نقدی</option>
+                                <option value="کارتخوان">کارتخوان</option>
+                                <option value="چک">چک</option>
+                                <option value="آنلاین">آنلاین</option>
+                            </select>
+                        </div>
+                        
+                        <h3 class="text-xl font-semibold pt-2">اقلام فروخته شده</h3>
+                        <div id="items-list" class="space-y-3">
+                            <!-- Items will be added here -->
+                        </div>
+                        <button type="button" id="add-item-btn" class="text-emerald-600 hover:text-emerald-700 font-bold border-2 border-emerald-600 rounded-lg p-2 transition duration-200">
+                            + افزودن کالا به فروش
+                        </button>
+
+                        <div id="summary" class="bg-emerald-50 p-4 rounded-lg mt-4 font-bold">
+                            <p>مجموع کل فروش: <span id="total-sale">۰ تومان</span></p>
+                            <p>سود ناخالص: <span id="total-profit">۰ تومان</span></p>
+                            <p>پورسانت فروشنده: <span id="salesman-commission">۰ تومان</span></p>
+                            <p class="text-lg text-emerald-700">سود خالص نهایی: <span id="final-profit">۰ تومان</span></p>
+                        </div>
+
+                        <button type="submit" class="w-full bg-emerald-600 text-white p-3 rounded-xl font-semibold hover:bg-emerald-700 transition duration-200 shadow-lg">
+                            ثبت نهایی فروش
+                        </button>
+                    </form>
+                    
+                    <h2 class="text-2xl font-bold text-gray-800 border-b pb-2 pt-4">لیست کامل فروش‌های ثبت شده</h2>
+                    <div id="sales-list-view">
+                        <!-- Full Sales List will be rendered here -->
+                    </div>
+                </div>
+            `;
+            TAB_CONTENT.innerHTML = salesRegHTML;
+            
+            // Setup dynamic elements
+            const salesRegForm = document.getElementById('sales-reg-form');
+            const addItemBtn = document.getElementById('add-item-btn');
+            const itemsListDiv = document.getElementById('items-list');
+            const commissionInput = document.getElementById('commission-percent');
+
+            let itemCounter = 0;
+            // This array holds the current state of items in the form
+            let addedItems = [];
+            
+            // Function to update the summary every time an item is added or quantity/percent changes
+            function updateSummary() {
+                let totalSale = 0;
+                let totalCost = 0;
+                const commissionPercent = parseFloat(commissionInput.value) || 0;
+
+                addedItems.forEach(item => {
+                    const quantity = parseFloat(document.getElementById(`quantity-${item.id}`)?.value) || 0;
+                    totalSale += item.price * quantity;
+                    totalCost += item.cost * quantity;
+                });
+
+                const totalProfit = totalSale - totalCost;
+                // COMMISSION IS CALCULATED FROM GROSS PROFIT
+                const salesmanCommission = totalProfit * (commissionPercent / 100);
+                const finalProfit = totalProfit - salesmanCommission;
+
+                document.getElementById('total-sale').textContent = formatCurrency(totalSale);
+                document.getElementById('total-profit').textContent = formatCurrency(totalProfit);
+                document.getElementById('salesman-commission').textContent = formatCurrency(salesmanCommission);
+                document.getElementById('final-profit').textContent = formatCurrency(finalProfit);
+            }
+
+            // Function to add a single item row to the form
+            function addItemRow() {
+                if (products.length === 0) {
+                    return displayMessage("لطفاً ابتدا کالا ثبت کنید.", true);
+                }
+                
+                const currentId = itemCounter++;
+                const itemRow = document.createElement('div');
+                itemRow.id = `item-row-${currentId}`;
+                itemRow.className = 'grid grid-cols-1 sm:grid-cols-5 gap-3 p-3 bg-white border rounded-lg';
+                
+                itemRow.innerHTML = `
+                    <div class="sm:col-span-3">
+                        <select id="product-select-${currentId}" class="w-full p-2 border rounded-lg focus:ring-blue-500 focus:border-blue-500">
+                            ${productOptions}
+                        </select>
+                    </div>
+                    <input type="number" id="quantity-${currentId}" placeholder="تعداد" value="1" min="1" class="w-full p-2 border rounded-lg focus:ring-blue-500 focus:border-blue-500">
+                    <button type="button" class="remove-item-btn bg-red-500 text-white p-2 rounded-lg hover:bg-red-600 transition duration-200">حذف</button>
+                `;
+                
+                itemsListDiv.appendChild(itemRow);
+                
+                // Add to internal list and setup listeners
+                const productSelect = document.getElementById(`product-select-${currentId}`);
+                const quantityInput = document.getElementById(`quantity-${currentId}`);
+                
+                const selectedProduct = products.find(p => p.id === productSelect.value);
+                
+                // Add initial item data to the internal state
+                if (selectedProduct) {
+                    addedItems.push({ 
+                        id: currentId, 
+                        productId: selectedProduct.id, 
+                        price: selectedProduct.sellingPrice, 
+                        cost: selectedProduct.costPrice 
+                    });
+                }
+
+                productSelect.onchange = () => {
+                    const newProduct = products.find(p => p.id === productSelect.value);
+                    const index = addedItems.findIndex(item => item.id === currentId);
+                    if (index !== -1 && newProduct) {
+                        addedItems[index].productId = newProduct.id;
+                        // Use pre-calculated values from products array
+                        addedItems[index].price = newProduct.sellingPrice; 
+                        addedItems[index].cost = newProduct.costPrice;
+                    }
+                    updateSummary();
+                };
+                
+                quantityInput.oninput = updateSummary;
+                commissionInput.oninput = updateSummary; // Listen to commission changes
+                
+                // Handle removal
+                itemRow.querySelector('.remove-item-btn').onclick = () => {
+                    itemRow.remove();
+                    const index = addedItems.findIndex(item => item.id === currentId);
+                    if (index !== -1) {
+                        addedItems.splice(index, 1);
+                    }
+                    updateSummary();
+                };
+
+                updateSummary();
+            }
+
+            addItemBtn.onclick = addItemRow;
+            salesRegForm.onsubmit = handleSalesReg;
+            
+            // Add initial item row if products exist
+            if (products.length > 0) addItemRow();
+            
+            renderSalesList(); // Render list of past sales
+        }
+        
+        // Renders the full list of past sales
+        function renderSalesList() {
+             const salesListView = document.getElementById('sales-list-view');
+             if (!salesListView) return; 
+             
+             // Sort sales by Gregorian date descending (stored in ISO format)
+             const sortedSales = [...sales].sort((a, b) => new Date(b.date) - new Date(a.date));
+
+             if (sortedSales.length === 0) {
+                salesListView.innerHTML = '<p class="text-gray-500 mt-4">هیچ فروشی تاکنون ثبت نشده است.</p>';
+                return;
+             }
+
+             const listHTML = `
+                <div class="overflow-x-auto mt-4">
+                    <table class="min-w-full bg-white rounded-lg shadow-md">
+                        <thead class="bg-gray-200">
+                            <tr>
+                                <th class="py-3 px-4 text-right">تاریخ (YYYY-MM-DD)</th>
+                                <th class="py-3 px-4 text-right">کل فروش</th>
+                                <th class="py-3 px-4 text-right">سود ناخالص</th>
+                                <th class="py-3 px-4 text-right">پورسانت</th>
+                                <th class="py-3 px-4 text-right">سود خالص</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${sortedSales.map(s => `
+                                <tr class="border-b hover:bg-gray-50">
+                                    <!-- Display date in Gregorian ISO format -->
+                                    <td class="py-3 px-4">${s.date}</td>
+                                    <td class="py-3 px-4">${formatCurrency(s.totalSale)}</td>
+                                    <td class="py-3 px-4">${formatCurrency(s.dailyProfit)}</td>
+                                    <td class="py-3 px-4">${formatCurrency(s.salesmanCommission)} (${s.salesmanCommissionPercent}%)</td>
+                                    <td class="py-3 px-4 font-bold text-emerald-600">${formatCurrency(s.finalProfit)}</td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                </div>
+             `;
+             salesListView.innerHTML = listHTML;
+        }
+
+        async function handleSalesReg(event) {
+            event.preventDefault();
+
+            const saleDate = document.getElementById('sale-date').value; // Now in YYYY-MM-DD format
+            const commissionPercent = parseFloat(document.getElementById('commission-percent').value);
+            const paymentMethod = document.getElementById('payment-method').value;
+            const itemsListDiv = document.getElementById('items-list');
+            
+            if (!saleDate || isNaN(commissionPercent) || commissionPercent < 0 || itemsListDiv.children.length === 0) {
+                return displayMessage("لطفا تمام اطلاعات فروش و حداقل یک کالا را به درستی وارد کنید.", true);
+            }
+
+            let totalSale = 0;
+            let totalCost = 0;
+            const itemsSold = [];
+
+            for (const itemRow of itemsListDiv.children) {
+                const id = itemRow.id.split('-')[2];
+                const productSelect = document.getElementById(`product-select-${id}`);
+                const quantityInput = document.getElementById(`quantity-${id}`);
+
+                const productId = productSelect.value;
+                // Find the product data from the globally loaded products array
+                const product = products.find(p => p.id === productId);
+                const quantity = parseInt(quantityInput.value);
+
+                if (product && quantity > 0) {
+                    const price = product.sellingPrice; // Pre-calculated selling price
+                    const cost = product.costPrice;
+                    
+                    totalSale += price * quantity;
+                    totalCost += cost * quantity;
+
+                    itemsSold.push({
+                        productId: productId,
+                        name: product.name,
+                        price: price, // Selling price
+                        cost: cost,
+                        quantity: quantity
+                    });
+                }
+            }
+            
+            if (itemsSold.length === 0) {
+                 return displayMessage("هیچ کالای معتبری با تعداد مثبت وارد نشده است.", true);
+            }
+
+            // Final Calculations:
+            const totalProfit = totalSale - totalCost;
+            const salesmanCommission = totalProfit * (commissionPercent / 100);
+            const finalProfit = totalProfit - salesmanCommission;
+
+            const saleData = {
+                date: saleDate, // Stored in Gregorian ISO
+                paymentMethod: paymentMethod,
+                salesmanCommissionPercent: commissionPercent,
+                itemsSold: itemsSold,
+                totalSale: totalSale,
+                dailyProfit: totalProfit, // Gross Profit
+                salesmanCommission: salesmanCommission,
+                finalProfit: finalProfit, // Net Profit
+                timestamp: new Date().toISOString()
+            };
+
+            try {
+                await addDoc(collection(db, getCollectionPath('sales')), saleData);
+                document.getElementById('sales-reg-form').reset();
+                document.getElementById('items-list').innerHTML = '';
+                // Re-add one item row after reset
+                document.getElementById('add-item-btn').click(); 
+                
+                displayMessage(`فروش با موفقیت ثبت شد. سود خالص: ${formatCurrency(finalProfit)}`);
+            } catch (e) {
+                console.error("Error adding sale: ", e);
+                displayMessage("خطا در ثبت فروش.", true);
+            }
+        }
+
+        function renderSalesReportTab() {
+            const isCurrent = document.querySelector('.tab-btn.active')?.dataset.tab === 'sales-report';
+            if (!isCurrent) return;
+            
+            const todayGregorian = getCurrentGregorianDate();
+            const lastMonthGregorian = getDate30DaysAgo();
+
+            const salesReportHTML = `
+                <div class="space-y-6">
+                    <h2 class="text-2xl font-bold text-gray-800 border-b pb-2">۳. گزارش مالی فروش</h2>
+                    <form id="sales-report-form" class="bg-gray-100 p-6 rounded-xl shadow-inner space-y-4">
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <!-- Date Inputs are type="date" (Gregorian YYYY-MM-DD) -->
+                            <input type="date" id="report-start-date" placeholder="تاریخ شروع (YYYY-MM-DD)" class="w-full p-3 border rounded-lg focus:ring-emerald-500 focus:border-emerald-500" required value="${lastMonthGregorian}">
+                            <input type="date" id="report-end-date" placeholder="تاریخ پایان (YYYY-MM-DD)" class="w-full p-3 border rounded-lg focus:ring-emerald-500 focus:border-emerald-500" required value="${todayGregorian}">
+                        </div>
+                        <button type="submit" class="w-full bg-blue-600 text-white p-3 rounded-xl font-semibold hover:bg-blue-700 transition duration-200 shadow-lg">
+                            محاسبه گزارش در بازه زمانی
+                        </button>
+                    </form>
+                    
+                    <div id="report-summary" class="hidden">
+                        <!-- Summary and detailed report will be injected here -->
+                    </div>
+
+                    <div id="report-message" class="text-gray-500 text-center mt-4">لطفاً بازه زمانی میلادی را برای مشاهده گزارش انتخاب کنید.</div>
+                </div>
+            `;
+            TAB_CONTENT.innerHTML = salesReportHTML;
+            document.getElementById('sales-report-form').onsubmit = handleSalesReport;
+        }
+
+        function handleSalesReport(event) {
+            event.preventDefault();
+            const startDate = document.getElementById('report-start-date').value; // YYYY-MM-DD
+            const endDate = document.getElementById('report-end-date').value;     // YYYY-MM-DD
+            const reportSummary = document.getElementById('report-summary');
+            const reportMessage = document.getElementById('report-message');
+            
+            reportSummary.classList.add('hidden');
+            reportSummary.innerHTML = '';
+            reportMessage.classList.remove('hidden');
+            reportMessage.textContent = 'در حال محاسبه...';
+
+            if (!startDate || !endDate) {
+                reportMessage.textContent = 'لطفا تاریخ شروع و پایان را وارد کنید.';
+                return;
+            }
+            if (new Date(startDate) > new Date(endDate)) {
+                 reportMessage.textContent = 'تاریخ شروع نمی‌تواند بعد از تاریخ پایان باشد.';
+                 return;
+            }
+            
+            // Filter sales data in memory based on Gregorian ISO strings
+            const filteredSales = sales.filter(s => {
+                // s.date is stored in Gregorian ISO (YYYY-MM-DD)
+                return s.date >= startDate && s.date <= endDate;
+            });
+
+            if (filteredSales.length === 0) {
+                reportMessage.textContent = 'هیچ فروشی در بازه زمانی انتخاب شده یافت نشد.';
+                return;
+            }
+
+            let totalSale = 0;
+            let totalProfit = 0; // Gross Profit
+            let totalCommission = 0;
+
+            filteredSales.forEach(s => {
+                totalSale += s.totalSale;
+                totalProfit += s.dailyProfit;
+                totalCommission += s.salesmanCommission;
+            });
+
+            const finalProfit = totalProfit - totalCommission; // Net Profit
+
+            // Render Report
+            const summaryHTML = `
+                <h3 class="text-xl font-bold text-gray-800 pt-4">خلاصه گزارش (${startDate} تا ${endDate})</h3>
+                <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mt-4 text-center">
+                    <div class="bg-blue-100 p-4 rounded-lg">
+                        <p class="text-sm text-blue-600">کل فروش</p>
+                        <p class="text-xl font-extrabold text-blue-800">${formatCurrency(totalSale)}</p>
+                    </div>
+                    <div class="bg-orange-100 p-4 rounded-lg">
+                        <p class="text-sm text-orange-600">سود ناخالص</p>
+                        <p class="text-xl font-extrabold text-orange-800">${formatCurrency(totalProfit)}</p>
+                    </div>
+                    <div class="bg-red-100 p-4 rounded-lg">
+                        <p class="text-sm text-red-600">کل پورسانت</p>
+                        <p class="text-xl font-extrabold text-red-800">${formatCurrency(totalCommission)}</p>
+                    </div>
+                    <div class="bg-emerald-100 p-4 rounded-lg">
+                        <p class="text-sm text-emerald-600">سود خالص نهایی</p>
+                        <p class="text-xl font-extrabold text-emerald-800">${formatCurrency(finalProfit)}</p>
+                    </div>
+                </div>
+
+                <h3 class="text-xl font-bold text-gray-800 pt-8 border-t mt-6">جزئیات فروش‌ها</h3>
+                <div class="overflow-x-auto mt-4">
+                    <table class="min-w-full bg-white rounded-lg shadow-md">
+                        <thead class="bg-gray-200">
+                            <tr>
+                                <th class="py-3 px-4 text-right">تاریخ (YYYY-MM-DD)</th>
+                                <th class="py-3 px-4 text-right">کل فروش</th>
+                                <th class="py-3 px-4 text-right">سود خالص</th>
+                                <th class="py-3 px-4 text-right">روش پرداخت</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${filteredSales.map(s => `
+                                <tr class="border-b hover:bg-gray-50">
+                                    <!-- Display date in Gregorian ISO format -->
+                                    <td class="py-3 px-4">${s.date}</td>
+                                    <td class="py-3 px-4">${formatCurrency(s.totalSale)}</td>
+                                    <td class="py-3 px-4 font-bold text-emerald-600">${formatCurrency(s.finalProfit)}</td>
+                                    <td class="py-3 px-4">${s.paymentMethod}</td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                </div>
+            `;
+
+            reportSummary.innerHTML = summaryHTML;
+            reportSummary.classList.remove('hidden');
+            reportMessage.classList.add('hidden');
+        }
+        
+        // --- Gym Management (Men/Women) ---
+
+        function renderGymTab(gender) {
+            const isMen = gender === 'men';
+            const title = isMen ? 'باشگاه آقایان' : 'باشگاه بانوان';
+            const paymentsKey = isMen ? 'payments_men' : 'payments_women';
+            
+            const trainerOptions = trainers.map(t => `<option value="${t.id}">${t.name} (${t.commissionPercent}%)</option>`).join('');
+            
+            const today = new Date();
+            const currentYear = today.getFullYear();
+            const currentMonth = today.getMonth() + 1; // getMonth() returns 0-11
+
+            const gymHTML = `
+                <div class="space-y-6">
+                    <h2 class="text-2xl font-bold text-gray-800 border-b pb-2">${title}</h2>
+                    
+                    <!-- Trainer Management Section -->
+                    <div class="bg-pink-50 p-6 rounded-xl shadow-inner space-y-4">
+                        <h3 class="text-xl font-semibold text-pink-700">مدیریت مربیان</h3>
+                        <form id="add-trainer-form">
+                             <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                                <input type="text" id="trainer-name" placeholder="نام مربی" class="w-full p-3 border rounded-lg" required>
+                                <input type="number" id="trainer-commission" placeholder="کمیسیون (%)" value="10" class="w-full p-3 border rounded-lg" required min="0">
+                                <button type="submit" class="bg-pink-600 text-white p-3 rounded-xl font-semibold hover:bg-pink-700 transition">ثبت مربی</button>
+                             </div>
+                        </form>
+                        <div id="trainer-list-view">
+                            <!-- Trainers List will be rendered here -->
+                        </div>
+                    </div>
+
+                    <!-- Payment Registration Section -->
+                    <div class="bg-emerald-50 p-6 rounded-xl shadow-inner space-y-4">
+                        <h3 class="text-xl font-semibold text-emerald-700">ثبت پرداختی اعضا</h3>
+                        ${trainers.length === 0 ? '<p class="text-red-500">لطفاً ابتدا حداقل یک مربی ثبت کنید.</p>' : `
+                            <form id="payment-reg-form" data-key="${paymentsKey}">
+                                <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                    <input type="text" id="member-name" placeholder="نام عضو" class="w-full p-3 border rounded-lg" required>
+                                    <input type="number" id="amount-paid" placeholder="مبلغ پرداختی (تومان)" class="w-full p-3 border rounded-lg" required min="0">
+                                    <!-- Date Input is now type="date" (Gregorian YYYY-MM-DD) -->
+                                    <input type="date" id="payment-date" placeholder="تاریخ پرداخت (YYYY-MM-DD)" class="w-full p-3 border rounded-lg" required value="${getCurrentGregorianDate()}">
+                                </div>
+                                <div class="mt-4">
+                                    <label for="trainer-select" class="block mb-2 font-medium">مربی مرتبط</label>
+                                    <select id="trainer-select" class="w-full p-3 border rounded-lg" required>
+                                        ${trainerOptions}
+                                    </select>
+                                </div>
+                                <button type="submit" class="w-full mt-6 bg-emerald-600 text-white p-3 rounded-xl font-semibold hover:bg-emerald-700 transition">
+                                    ثبت پرداختی
+                                </button>
+                            </form>
+                        `}
+                        <h3 class="text-xl font-semibold pt-4 border-t mt-4">لیست کامل پرداختی‌ها</h3>
+                        <div id="payments-list-${gender}">
+                            <!-- Payments List will be rendered here -->
+                        </div>
+                    </div>
+                    
+                    <!-- Payroll Report Section -->
+                    <div class="bg-blue-50 p-6 rounded-xl shadow-inner space-y-4">
+                        <h3 class="text-xl font-semibold text-blue-700">۳. گزارش حقوق مربیان (بر اساس تاریخ پرداخت میلادی)</h3>
+                        <form id="payroll-report-form" data-key="${paymentsKey}">
+                             <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                                <!-- Now uses standard Gregorian Month/Year -->
+                                <input type="number" id="report-year" placeholder="سال (مثلاً: ${currentYear})" value="${currentYear}" class="w-full p-3 border rounded-lg" required min="2000">
+                                <input type="number" id="report-month" placeholder="ماه (مثلاً: ${currentMonth})" value="${currentMonth}" class="w-full p-3 border rounded-lg" required min="1" max="12">
+                                <button type="submit" class="bg-blue-600 text-white p-3 rounded-xl font-semibold hover:bg-blue-700 transition">محاسبه حقوق</button>
+                             </div>
+                        </form>
+                        <div id="payroll-summary" class="mt-4">
+                            <!-- Payroll Summary will be injected here -->
+                        </div>
+                    </div>
+
+                </div>
+            `;
+            TAB_CONTENT.innerHTML = gymHTML;
+
+            // Setup listeners for gym tab
+            document.getElementById('add-trainer-form')?.addEventListener('submit', handleAddTrainer);
+            document.getElementById('payment-reg-form')?.addEventListener('submit', handlePaymentReg);
+            document.getElementById('payroll-report-form')?.addEventListener('submit', handlePayrollReport);
+
+            renderTrainerList();
+            renderGymPaymentsList(paymentsKey);
+        }
+        
+        // Renders the list of all trainers
+        function renderTrainerList() {
+            const trainerListView = document.getElementById('trainer-list-view');
+            if (!trainerListView) return;
+
+            if (trainers.length === 0) {
+                trainerListView.innerHTML = '<p class="text-gray-500 mt-4">هیچ مربی ثبت نشده است.</p>';
+                return;
+            }
+
+            const listHTML = `
+                <div class="overflow-x-auto mt-4">
+                    <table class="min-w-full bg-white rounded-lg shadow-md">
+                        <thead class="bg-gray-200">
+                            <tr>
+                                <th class="py-3 px-4 text-right">نام مربی</th>
+                                <th class="py-3 px-4 text-right">کمیسیون (%)</th>
+                                <th class="py-3 px-4 text-center">عملیات</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${trainers.map(t => `
+                                <tr class="border-b hover:bg-gray-50">
+                                    <td class="py-3 px-4">${t.name}</td>
+                                    <td class="py-3 px-4">${t.commissionPercent}%</td>
+                                    <td class="py-3 px-4 text-center">
+                                        <button onclick="window.deleteTrainer('${t.id}', '${t.name}')" class="text-red-500 hover:text-red-700 text-sm">حذف</button>
+                                    </td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                </div>
+            `;
+            trainerListView.innerHTML = listHTML;
+        }
+
+        window.deleteTrainer = async function(trainerId, trainerName) {
+            if (confirm(`آیا مطمئن هستید که می‌خواهید مربی "${trainerName}" را حذف کنید؟`)) {
+                 try {
+                    await setDoc(doc(db, getCollectionPath('trainers'), trainerId), {deleted: true}, { merge: true });
+                    displayMessage(`مربی "${trainerName}" حذف شد.`);
+                 } catch (e) {
+                    console.error("Error deleting document: ", e);
+                    displayMessage("خطا در حذف مربی.", true);
+                 }
+            }
+        }
+        
+        async function handleAddTrainer(event) {
+            event.preventDefault();
+            const name = document.getElementById('trainer-name').value.trim();
+            const commission = parseFloat(document.getElementById('trainer-commission').value);
+
+            if (!name || isNaN(commission) || commission < 0) {
+                return displayMessage("لطفا نام و درصد کمیسیون مربی را به درستی وارد کنید.", true);
+            }
+
+            const newTrainer = {
+                name: name,
+                commissionPercent: commission,
+                createdAt: new Date().toISOString()
+            };
+
+            try {
+                await addDoc(collection(db, getCollectionPath('trainers')), newTrainer);
+                document.getElementById('add-trainer-form').reset();
+                displayMessage(`مربی "${name}" با موفقیت ثبت شد.`);
+            } catch (e) {
+                console.error("Error adding trainer: ", e);
+                displayMessage("خطا در ثبت مربی.", true);
+            }
+        }
+        
+
+        // Renders the full list of payments for men or women
+        function renderGymPaymentsList(paymentsKey) {
+            const isMen = paymentsKey === 'payments_men';
+            const payments = isMen ? paymentsMen : paymentsWomen;
+            const gender = isMen ? 'men' : 'women';
+            const paymentsListView = document.getElementById(`payments-list-${gender}`);
+            if (!paymentsListView) return;
+
+            // Map trainer IDs to names for display
+            const trainerMap = trainers.reduce((acc, t) => {
+                acc[t.id] = { name: t.name, commission: t.commissionPercent };
+                return acc;
+            }, {});
+
+            if (payments.length === 0) {
+                paymentsListView.innerHTML = '<p class="text-gray-500 mt-4">هیچ پرداختی تاکنون ثبت نشده است.</p>';
+                return;
+            }
+
+            // Sort payments by Gregorian date descending
+            const sortedPayments = [...payments].sort((a, b) => new Date(b.paymentDate) - new Date(a.paymentDate));
+
+            const listHTML = `
+                <div class="overflow-x-auto mt-4">
+                    <table class="min-w-full bg-white rounded-lg shadow-md">
+                        <thead class="bg-gray-200">
+                            <tr>
+                                <th class="py-3 px-4 text-right">نام عضو</th>
+                                <th class="py-3 px-4 text-right">مبلغ پرداختی</th>
+                                <th class="py-3 px-4 text-right">تاریخ پرداخت (YYYY-MM-DD)</th>
+                                <th class="py-3 px-4 text-right">مربی</th>
+                                <th class="py-3 px-4 text-right">پایان دوره (YYYY-MM-DD)</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${sortedPayments.map(p => {
+                                const trainerInfo = trainerMap[p.trainerId] || { name: 'نامشخص', commission: 0 };
+                                return `
+                                    <tr class="border-b hover:bg-gray-50">
+                                        <td class="py-3 px-4">${p.memberName}</td>
+                                        <td class="py-3 px-4 font-bold text-blue-600">${formatCurrency(p.amountPaid)}</td>
+                                        <!-- Display date in Gregorian ISO format -->
+                                        <td class="py-3 px-4">${p.paymentDate}</td>
+                                        <td class="py-3 px-4">${trainerInfo.name}</td>
+                                        <!-- Display period end date in Gregorian ISO format -->
+                                        <td class="py-3 px-4">${p.periodEnd}</td>
+                                    </tr>
+                                `;
+                            }).join('')}
+                        </tbody>
+                    </table>
+                </div>
+            `;
+            paymentsListView.innerHTML = listHTML;
+        }
+
+        async function handlePaymentReg(event) {
+            event.preventDefault();
+            const form = event.target;
+            const paymentsKey = form.dataset.key;
+            
+            const memberName = document.getElementById('member-name').value.trim();
+            const amountPaid = parseFloat(document.getElementById('amount-paid').value);
+            const paymentDate = document.getElementById('payment-date').value; // Now in YYYY-MM-DD format
+            const trainerId = document.getElementById('trainer-select').value;
+            const selectedTrainer = trainers.find(t => t.id === trainerId);
+
+            if (!paymentDate) {
+                return displayMessage("لطفا تاریخ پرداخت را وارد کنید.", true);
+            }
+            if (!memberName || isNaN(amountPaid) || amountPaid <= 0 || !selectedTrainer) {
+                return displayMessage("لطفا تمام فیلدها را به درستی پر کنید.", true);
+            }
+            
+            // Calculate 30 days period end date (using Gregorian date object for math)
+            const dateObj = new Date(paymentDate + 'T00:00:00'); // Use ISO string with time to avoid timezone issues
+            dateObj.setDate(dateObj.getDate() + 30);
+            const periodEnd = dateObj.toISOString().substring(0, 10); // YYYY-MM-DD
+
+            const newPayment = {
+                memberName: memberName,
+                amountPaid: amountPaid,
+                paymentDate: paymentDate, // Gregorian for storage
+                trainerId: trainerId,
+                trainerName: selectedTrainer.name,
+                trainerCommissionPercent: selectedTrainer.commissionPercent,
+                periodStart: paymentDate, // Gregorian for storage
+                periodEnd: periodEnd,     // Gregorian for storage
+                timestamp: new Date().toISOString()
+            };
+
+            try {
+                await addDoc(collection(db, getCollectionPath(paymentsKey)), newPayment);
+                form.reset();
+                document.getElementById('payment-date').value = getCurrentGregorianDate(); // Reset date field manually
+                displayMessage(`پرداختی "${memberName}" برای مربی ${selectedTrainer.name} ثبت شد. (پایان دوره: ${periodEnd})`);
+            } catch (e) {
+                console.error("Error adding payment: ", e);
+                displayMessage("خطا در ثبت پرداختی.", true);
+            }
+        }
+        
+        async function handlePayrollReport(event) {
+            event.preventDefault();
+            const form = event.target;
+            const paymentsKey = form.dataset.key;
+            const payments = paymentsKey === 'payments_men' ? paymentsMen : paymentsWomen;
+            
+            const reportYear = parseInt(document.getElementById('report-year').value);
+            const reportMonth = parseInt(document.getElementById('report-month').value);
+            const payrollSummaryDiv = document.getElementById('payroll-summary');
+            
+            payrollSummaryDiv.innerHTML = 'در حال محاسبه...';
+
+            if (isNaN(reportYear) || isNaN(reportMonth) || reportMonth < 1 || reportMonth > 12) {
+                 payrollSummaryDiv.innerHTML = '<p class="text-red-500">لطفاً سال و ماه میلادی معتبری وارد کنید.</p>';
+                return;
+            }
+            
+            // Pad month with leading zero (e.g., 9 -> 09)
+            const monthString = String(reportMonth).padStart(2, '0');
+
+            // Filter payments based on Gregorian Month and Year
+            const monthlyPayments = payments.filter(p => {
+                // p.paymentDate is YYYY-MM-DD. Check if it starts with YYYY-MM
+                return p.paymentDate.startsWith(`${reportYear}-${monthString}`);
+            });
+
+            if (monthlyPayments.length === 0) {
+                payrollSummaryDiv.innerHTML = `<p class="text-gray-500 mt-4">هیچ پرداختی در ماه ${monthString}/${reportYear} یافت نشد.</p>`;
+                return;
+            }
+
+            // Group payments by trainer
+            const trainerPayroll = {};
+
+            monthlyPayments.forEach(p => {
+                // Use the stored commission percentage in the payment record for accuracy
+                const commissionPercent = p.trainerCommissionPercent; 
+                const trainerId = p.trainerId;
+                const trainerName = p.trainerName;
+                
+                if (!trainerPayroll[trainerId]) {
+                    trainerPayroll[trainerId] = {
+                        name: trainerName,
+                        totalReceived: 0,
+                        commissionPercent: commissionPercent,
+                        totalCommission: 0,
+                        paymentCount: 0
+                    };
+                }
+                
+                const commissionAmount = p.amountPaid * (commissionPercent / 100);
+
+                trainerPayroll[trainerId].totalReceived += p.amountPaid;
+                trainerPayroll[trainerId].totalCommission += commissionAmount;
+                trainerPayroll[trainerId].paymentCount++;
+            });
+            
+            const trainerList = Object.values(trainerPayroll);
+
+            let totalPayout = trainerList.reduce((sum, t) => sum + t.totalCommission, 0);
+
+            // Render Payroll Report
+            const reportHTML = `
+                <h3 class="text-xl font-bold text-gray-800 pt-4">خلاصه حقوق مربیان - ماه ${monthString}/${reportYear}</h3>
+                <div class="bg-blue-100 p-3 rounded-lg text-center font-bold my-4">
+                    مجموع کل حق کمیسیون مربیان: <span class="text-2xl text-blue-800">${formatCurrency(totalPayout)}</span>
+                </div>
+                
+                <div class="overflow-x-auto mt-4">
+                    <table class="min-w-full bg-white rounded-lg shadow-md">
+                        <thead class="bg-blue-500 text-white">
+                            <tr>
+                                <th class="py-3 px-4 text-right">نام مربی</th>
+                                <th class="py-3 px-4 text-right">کمیسیون (%)</th>
+                                <th class="py-3 px-4 text-right">کل پرداختی اعضا (تومان)</th>
+                                <th class="py-3 px-4 text-right">حق کمیسیون نهایی</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${trainerList.map(t => `
+                                <tr class="border-b hover:bg-gray-50">
+                                    <td class="py-3 px-4 font-semibold">${t.name}</td>
+                                    <td class="py-3 px-4">${t.commissionPercent}%</td>
+                                    <td class="py-3 px-4">${formatCurrency(t.totalReceived)}</td>
+                                    <td class="py-3 px-4 font-bold text-emerald-600">${formatCurrency(t.totalCommission)}</td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                </div>
+            `;
+            payrollSummaryDiv.innerHTML = reportHTML;
+        }
+
+        // --- Event Listeners for Tab Switching ---
+
+        document.addEventListener('DOMContentLoaded', () => {
+            document.querySelectorAll('.tab-btn').forEach(button => {
+                button.addEventListener('click', (e) => {
+                    switchTab(e.target.dataset.tab);
+                });
+            });
+            // Start the application lifecycle
+            initFirebase();
+        });
+        
+    </script>
+</body>
+</html>
