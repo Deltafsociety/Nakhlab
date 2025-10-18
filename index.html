@@ -6,7 +6,6 @@
     <title>باشگاه نخلاب - پنل مدیریت</title>
     <!-- Tailwind CSS CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- Jalaali Date Library (REMOVED as per user request to use Gregorian) -->
     <!-- Font: Vazirmatn for Persian text -->
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;700;900&display=swap');
@@ -75,7 +74,7 @@
     <!-- Firebase Imports and Main Application Logic -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, doc, setDoc, onSnapshot, collection, query, addDoc, updateDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
         import { setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
         
@@ -95,10 +94,25 @@
         
         // setLogLevel('Debug'); // Uncomment for debugging Firebase
 
-        // Global variables provided by the environment
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-        const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
-        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+        // -------------------------------------------------------------------
+        // !!! قدم حیاتی برای دیپلوی خارج از Canvas !!!
+        // شما باید مقادیر YOUR_..._HERE را با تنظیمات Firebase خود جایگزین کنید.
+        // این تنظیمات را می‌توانید از کنسول Firebase خود (تنظیمات پروژه > عمومی) دریافت کنید.
+        // -------------------------------------------------------------------
+
+        const appId = 'nakhlab-app-prod'; // شناسه ثابت برای استقرار.
+        
+        const firebaseConfig = {
+            apiKey: "AIzaSyAiKvN6Ii1KhTlqHwVKCWILWdL878QW3h0", 
+            authDomain: "nakhlab-ec4b3.firebaseapp.com",
+            projectId: "nakhlab-ec4b3",
+            storageBucket: "nakhlab-ec4b3.firebasestorage.app",
+            messagingSenderId: "261714770697",
+            appId: "1:261714770697:web:898936f8e5d3ab345d31d8"
+        };
+
+        // متغیرهای زیر دیگر از محیط Canvas تزریق نمی شوند و حذف شده اند.
+        // const initialAuthToken = null; 
 
         let db, auth, userId;
         const LOADING_INDICATOR = document.getElementById('loading-indicator');
@@ -135,6 +149,7 @@
         
         // Helper: Get Firestore path for a collection (private user data)
         function getCollectionPath(collectionName) {
+            // از appId ثابت جدید و userId برای مسیر Firestore استفاده می شود.
             return `artifacts/${appId}/users/${userId}/${collectionName}`;
         }
 
@@ -142,28 +157,21 @@
 
         async function initFirebase() {
             try {
+                // اگر تنظیمات اولیه خالی باشد، فایربیس شروع به کار نمی کند.
+                if (!firebaseConfig.apiKey || firebaseConfig.apiKey.includes('YOUR_')) {
+                    throw new Error("لطفاً تنظیمات Firebase را در کد جایگزین کنید.");
+                }
+
                 const app = initializeApp(firebaseConfig);
                 auth = getAuth(app);
                 db = getFirestore(app);
 
-                // Wait for auth state to be ready
-                await new Promise((resolve) => {
-                    onAuthStateChanged(auth, async (user) => {
-                        if (user) {
-                            userId = user.uid;
-                            USER_ID_SPAN.textContent = userId;
-                            resolve();
-                        } else {
-                            // Try to sign in with custom token or anonymously
-                            if (initialAuthToken) {
-                                await signInWithCustomToken(auth, initialAuthToken);
-                            } else {
-                                await signInAnonymously(auth);
-                            }
-                        }
-                    });
-                });
-
+                // در محیط دیپلوی شده، به جای توکن اولیه، به صورت Anonymous وارد می شویم
+                // تا دسترسی به داده های Firestore بر اساس قوانین امنیتی (Security Rules) فراهم شود.
+                const userCredential = await signInAnonymously(auth);
+                userId = userCredential.user.uid;
+                USER_ID_SPAN.textContent = userId;
+                
                 LOADING_INDICATOR.classList.add('hidden');
                 MAIN_CONTENT.classList.remove('hidden');
                 
@@ -175,6 +183,12 @@
 
             } catch (error) {
                 console.error("Firebase Initialization Error:", error);
+                // اگر خطا به دلیل تنظیمات نادرست باشد، پیام دقیق تر نمایش داده می شود.
+                const errorMessage = error.message.includes('YOUR_') 
+                    ? "خطا در احراز هویت: لطفاً تنظیمات Firebase را در فایل index.html جایگزین کنید."
+                    : "خطا در احراز هویت. لطفاً مطمئن شوید که به اینترنت متصل هستید یا دوباره تلاش کنید.";
+
+                AUTH_WARNING.textContent = errorMessage;
                 LOADING_INDICATOR.classList.add('hidden');
                 AUTH_WARNING.classList.remove('hidden');
             }
