@@ -78,9 +78,21 @@
         import { getFirestore, doc, setDoc, onSnapshot, collection, query, addDoc, updateDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
         import { setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
         
-        // --- Date Helper (Gregorian/Miladi) ---
+        // --- تنظیمات Firebase شما (اعمال شده توسط Gemini) ---
+        const appId = 'nakhlab-app-prod'; // شناسه ثابت برای استقرار.
+        
+        const firebaseConfig = {
+            apiKey: "AIzaSyAiKvN6Ii1KhTlqHwVKCWILWdL878QW3h0", 
+            authDomain: "nakhlab-ec4b3.firebaseapp.com",
+            projectId: "nakhlab-ec4b3",
+            storageBucket: "nakhlab-ec4b3.firebasestorage.app",
+            messagingSenderId: "261714770697",
+            appId: "1:261714770697:web:898936f8e5d3ab345d31d8",
+            measurementId: "G-Y5B8DTD9MT"
+        };
+        // --- پایان تنظیمات Firebase ---
 
-        // Helper to get current date in Gregorian ISO format (YYYY-MM-DD)
+        // Helper: Get current date in Gregorian ISO format (YYYY-MM-DD)
         function getCurrentGregorianDate() {
             return new Date().toISOString().substring(0, 10);
         }
@@ -93,26 +105,6 @@
         }
         
         // setLogLevel('Debug'); // Uncomment for debugging Firebase
-
-        // -------------------------------------------------------------------
-        // !!! قدم حیاتی برای دیپلوی خارج از Canvas !!!
-        // شما باید مقادیر YOUR_..._HERE را با تنظیمات Firebase خود جایگزین کنید.
-        // این تنظیمات را می‌توانید از کنسول Firebase خود (تنظیمات پروژه > عمومی) دریافت کنید.
-        // -------------------------------------------------------------------
-
-        const appId = 'nakhlab-app-prod'; // شناسه ثابت برای استقرار.
-        
-        const firebaseConfig = {
-            apiKey: "AIzaSyAiKvN6Ii1KhTlqHwVKCWILWdL878QW3h0", 
-            authDomain: "nakhlab-ec4b3.firebaseapp.com",
-            projectId: "nakhlab-ec4b3",
-            storageBucket: "nakhlab-ec4b3.firebasestorage.app",
-            messagingSenderId: "261714770697",
-            appId: "1:261714770697:web:898936f8e5d3ab345d31d8"
-        };
-
-        // متغیرهای زیر دیگر از محیط Canvas تزریق نمی شوند و حذف شده اند.
-        // const initialAuthToken = null; 
 
         let db, auth, userId;
         const LOADING_INDICATOR = document.getElementById('loading-indicator');
@@ -157,17 +149,11 @@
 
         async function initFirebase() {
             try {
-                // اگر تنظیمات اولیه خالی باشد، فایربیس شروع به کار نمی کند.
-                if (!firebaseConfig.apiKey || firebaseConfig.apiKey.includes('YOUR_')) {
-                    throw new Error("لطفاً تنظیمات Firebase را در کد جایگزین کنید.");
-                }
-
                 const app = initializeApp(firebaseConfig);
                 auth = getAuth(app);
                 db = getFirestore(app);
 
-                // در محیط دیپلوی شده، به جای توکن اولیه، به صورت Anonymous وارد می شویم
-                // تا دسترسی به داده های Firestore بر اساس قوانین امنیتی (Security Rules) فراهم شود.
+                // ورود به صورت Anonymous برای فراهم کردن userId و دسترسی به Firestore
                 const userCredential = await signInAnonymously(auth);
                 userId = userCredential.user.uid;
                 USER_ID_SPAN.textContent = userId;
@@ -183,10 +169,15 @@
 
             } catch (error) {
                 console.error("Firebase Initialization Error:", error);
+                
+                let errorMessage = "خطا در احراز هویت. لطفاً مطمئن شوید که به اینترنت متصل هستید یا دوباره تلاش کنید.";
+
                 // اگر خطا به دلیل تنظیمات نادرست باشد، پیام دقیق تر نمایش داده می شود.
-                const errorMessage = error.message.includes('YOUR_') 
-                    ? "خطا در احراز هویت: لطفاً تنظیمات Firebase را در فایل index.html جایگزین کنید."
-                    : "خطا در احراز هویت. لطفاً مطمئن شوید که به اینترنت متصل هستید یا دوباره تلاش کنید.";
+                if (error.code === 'auth/operation-not-allowed') {
+                    errorMessage = "خطا: ورود ناشناس (Anonymous) فعال نیست. لطفاً این قابلیت را در کنسول Firebase (Authentication > Settings) فعال کنید.";
+                } else if (error.code && error.code.includes('permission-denied')) {
+                     errorMessage = "خطا در دسترسی به داده. لطفاً قوانین امنیتی Firestore را در کنسول Firebase بررسی و تنظیم کنید.";
+                }
 
                 AUTH_WARNING.textContent = errorMessage;
                 LOADING_INDICATOR.classList.add('hidden');
@@ -194,7 +185,7 @@
             }
         }
 
-        // --- Data Listeners & State Management ---
+        // --- Data Listeners & State Management (همان کد قبلی) ---
 
         let products = [];
         let sales = [];
@@ -244,7 +235,7 @@
             });
         }
 
-        // --- UI & Rendering Functions ---
+        // --- UI & Rendering Functions (همان کد قبلی) ---
         
         function switchTab(tabId) {
             // Hide all tab content
